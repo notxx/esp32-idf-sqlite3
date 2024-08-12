@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <sqlite3.h>
 #include <esp_spi_flash.h>
-#include <esp_system.h>
+#include <esp_random.h>
 #include <rom/ets_sys.h>
 #include <sys/stat.h>
 
@@ -23,7 +23,7 @@
 
 #undef dbg_printf
 //#define dbg_printf(...) printf(__VA_ARGS__)
-#define dbg_printf(...) 
+#define dbg_printf(...) if (unlikely(0)) printf(__VA_ARGS__)
 #define CACHEBLOCKSZ 64
 #define esp32_DEFAULT_MAXNAMESIZE 100
 
@@ -97,62 +97,78 @@ typedef struct st_filecache {
 
 typedef struct esp32_file {
 	sqlite3_file base;
-	FILE *fd;
-	filecache_t *cache;
+	FILE * fd;
+	filecache_t * cache;
 	char name[esp32_DEFAULT_MAXNAMESIZE];
 } esp32_file;
 
 sqlite3_vfs  esp32Vfs = {
-	1,			// iVersion
+	1,					// iVersion
 	sizeof(esp32_file),	// szOsFile
-	101,	// mxPathname
-	NULL,			// pNext
-	"esp32",		// name
-	0,			// pAppData
-	esp32_Open,		// xOpen
+	101,				// mxPathname
+	NULL,				// pNext
+	"esp32",			// name
+	0,					// pAppData
+	esp32_Open,			// xOpen
 	esp32_Delete,		// xDelete
 	esp32_Access,		// xAccess
 	esp32_FullPathname,	// xFullPathname
 	esp32_DlOpen,		// xDlOpen
-	esp32_DlError,	// xDlError
+	esp32_DlError,		// xDlError
 	esp32_DlSym,		// xDlSym
-	esp32_DlClose,	// xDlClose
+	esp32_DlClose,		// xDlClose
 	esp32_Randomness,	// xRandomness
 	esp32_Sleep,		// xSleep
 	esp32_CurrentTime,	// xCurrentTime
-	0			// xGetLastError
+	NULL,				// xGetLastError
+	NULL,				// xCurrentTimeInt64
+	NULL,				// xSetSystemCall
+	NULL,				// xGetSystemCall
+	NULL,				// xNextSystemCall
 };
 
 const sqlite3_io_methods esp32IoMethods = {
-	1,
-	esp32_Close,
-	esp32_Read,
-	esp32_Write,
-	esp32_Truncate,
-	esp32_Sync,
-	esp32_FileSize,
-	esp32_Lock,
-	esp32_Unlock,
-	esp32_CheckReservedLock,
-	esp32_FileControl,
-	esp32_SectorSize,
-	esp32_DeviceCharacteristics
+	1,								// iVersion
+	esp32_Close,					// xClose
+	esp32_Read,						// xRead
+	esp32_Write,					// xWrite
+	esp32_Truncate,					// xTruncate
+	esp32_Sync,						// xSync
+	esp32_FileSize,					// xFileSize
+	esp32_Lock,						// xLock
+	esp32_Unlock,					// xUnlock
+	esp32_CheckReservedLock,		// xCheckReservedLock
+	esp32_FileControl,				// xFileControl
+	esp32_SectorSize,				// xSectorSize
+	esp32_DeviceCharacteristics,	// xDeviceCharacteristics
+	NULL,							// xShmMap
+	NULL,							// xShmLock
+	NULL,							// xShmUnlock
+	NULL,							// xShmBarrier
+	NULL,							// xFetch
+	NULL,							// xUnfetch
 };
 
 const sqlite3_io_methods esp32MemMethods = {
-	1,
-	esp32mem_Close,
-	esp32mem_Read,
-	esp32mem_Write,
-	esp32_Truncate,
-	esp32mem_Sync,
-	esp32mem_FileSize,
-	esp32_Lock,
-	esp32_Unlock,
-	esp32_CheckReservedLock,
-	esp32_FileControl,
-	esp32_SectorSize,
-	esp32_DeviceCharacteristics
+	1,								// iVersion
+	esp32mem_Close,					// xClose
+	esp32mem_Read,					// xRead
+	esp32mem_Write,					// xWrite
+	esp32_Truncate,					// xTruncate
+	esp32mem_Sync,					// xSync
+	esp32mem_FileSize,				// xFileSize
+	esp32_Lock,						// xLock
+	esp32_Unlock,					// xUnlock
+	esp32_CheckReservedLock,		// xCheckReservedLock
+	esp32_FileControl,				// xFileControl
+	esp32_SectorSize,				// xSectorSize
+	esp32_DeviceCharacteristics,	// xDeviceCharacteristics
+	NULL,							// xShmMap
+	NULL,							// xShmLock
+	NULL,							// xShmUnlock
+	NULL,							// xShmBarrier
+	NULL,							// xFetch
+	NULL,							// xUnfetch
 };
 
 uint32_t linkedlist_store (linkedlist_t **leaf, uint32_t offset, uint32_t len, const uint8_t *data) {
@@ -316,7 +332,7 @@ int esp32mem_Read(sqlite3_file *id, void *buffer, int amount, sqlite3_int64 offs
 
 	filecache_pull (file->cache, ofst, amount, (uint8_t *) buffer);
 
-	dbg_printf("esp32mem_Read: %s [%d] [%d] OK\n", file->name, ofst, amount);
+	dbg_printf("esp32mem_Read: %s [%ld] [%d] OK\n", file->name, ofst, amount);
 	return SQLITE_OK;
 }
 
@@ -329,13 +345,13 @@ int esp32mem_Write(sqlite3_file *id, const void *buffer, int amount, sqlite3_int
 
 	filecache_push (file->cache, ofst, amount, (const uint8_t *) buffer);
 
-	dbg_printf("esp32mem_Write: %s [%d] [%d] OK\n", file->name, ofst, amount);
+	dbg_printf("esp32mem_Write: %s [%ld] [%d] OK\n", file->name, ofst, amount);
 	return SQLITE_OK;
 }
 
 int esp32mem_Sync(sqlite3_file *id, int flags)
 {
-	esp32_file *file = (esp32_file*) id;
+	esp32_file * file = (esp32_file *) id;
 	dbg_printf("esp32mem_Sync: %s OK\n", file->name);
 	return  SQLITE_OK;
 }
@@ -345,22 +361,21 @@ int esp32mem_FileSize(sqlite3_file *id, sqlite3_int64 *size)
 	esp32_file *file = (esp32_file*) id;
 
 	*size = 0LL | file->cache->size;
-	dbg_printf("esp32mem_FileSize: %s [%d] OK\n", file->name, file->cache->size);
+	dbg_printf("esp32mem_FileSize: %s [%ld] OK\n", file->name, file->cache->size);
 	return SQLITE_OK;
 }
 
 int esp32_Open( sqlite3_vfs * vfs, const char * path, sqlite3_file * file, int flags, int * outflags )
 {
-	int rc;
 	char mode[5];
 	esp32_file *p = (esp32_file*) file;
 
 	strcpy(mode, "r");
 	if ( path == NULL ) return SQLITE_IOERR;
 	dbg_printf("esp32_Open: 0o %s %s\n", path, mode);
-	if( flags&SQLITE_OPEN_READONLY ) 
+	if ( flags&SQLITE_OPEN_READONLY ) 
 		strcpy(mode, "r");
-	if( flags&SQLITE_OPEN_READWRITE || flags&SQLITE_OPEN_MAIN_JOURNAL ) {
+	if ( flags&SQLITE_OPEN_READWRITE || flags&SQLITE_OPEN_MAIN_JOURNAL ) {
 		int result;
 		if (SQLITE_OK != esp32_Access(vfs, path, flags, &result))
 			return SQLITE_CANTOPEN;
@@ -377,7 +392,7 @@ int esp32_Open( sqlite3_vfs * vfs, const char * path, sqlite3_file * file, int f
     strncpy (p->name, path, esp32_DEFAULT_MAXNAMESIZE);
 	p->name[esp32_DEFAULT_MAXNAMESIZE-1] = '\0';
 
-	if( flags&SQLITE_OPEN_MAIN_JOURNAL ) {
+	if ( flags&SQLITE_OPEN_MAIN_JOURNAL ) {
 		p->fd = 0;
 		p->cache = (filecache_t *) sqlite3_malloc(sizeof (filecache_t));
 		if (! p->cache )
@@ -390,7 +405,7 @@ int esp32_Open( sqlite3_vfs * vfs, const char * path, sqlite3_file * file, int f
 	}
 
 	p->fd = fopen(path, mode);
-    if ( p->fd <= 0 ) {
+    if ( p->fd == NULL ) {
 		return SQLITE_CANTOPEN;
 	}
 
@@ -416,10 +431,10 @@ int esp32_Read(sqlite3_file *id, void *buffer, int amount, sqlite3_int64 offset)
 
 	iofst = (int32_t)(offset & 0x7FFFFFFF);
 
-	dbg_printf("esp32_Read: 1r %s %d %lld[%d] \n", file->name, amount, offset, iofst);
+	dbg_printf("esp32_Read: 1r %s %d %lld[%ld] \n", file->name, amount, offset, iofst);
 	ofst = fseek(file->fd, iofst, SEEK_SET);
 	if (ofst != 0) {
-	    dbg_printf("esp32_Read: 2r %d != %d FAIL\n", ofst, iofst);
+	    dbg_printf("esp32_Read: 2r %ld != %ld FAIL\n", ofst, iofst);
 		return SQLITE_IOERR_SHORT_READ /* SQLITE_IOERR_SEEK */;
 	}
 
@@ -427,7 +442,7 @@ int esp32_Read(sqlite3_file *id, void *buffer, int amount, sqlite3_int64 offset)
 	if ( nRead == amount ) {
 	    dbg_printf("esp32_Read: 3r %s %u %d OK\n", file->name, nRead, amount);
 		return SQLITE_OK;
-	} else if ( nRead >= 0 ) {
+	} else /*if ( nRead >= 0 )*/ {
 	    dbg_printf("esp32_Read: 3r %s %u %d FAIL\n", file->name, nRead, amount);
 		return SQLITE_IOERR_SHORT_READ;
 	}
@@ -444,7 +459,7 @@ int esp32_Write(sqlite3_file *id, const void *buffer, int amount, sqlite3_int64 
 
 	iofst = (int32_t)(offset & 0x7FFFFFFF);
 
-	dbg_printf("esp32_Write: 1w %s %d %lld[%d] \n", file->name, amount, offset, iofst);
+	dbg_printf("esp32_Write: 1w %s %d %lld[%ld] \n", file->name, amount, offset, iofst);
 	ofst = fseek(file->fd, iofst, SEEK_SET);
 	if (ofst != 0) {
 		return SQLITE_IOERR_SEEK;
@@ -462,7 +477,7 @@ int esp32_Write(sqlite3_file *id, const void *buffer, int amount, sqlite3_int64 
 
 int esp32_Truncate(sqlite3_file *id, sqlite3_int64 bytes)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 	//int fno = fileno(file->fd);
 	//if (fno == -1)
 	//	return SQLITE_IOERR_TRUNCATE;
@@ -541,7 +556,7 @@ int esp32_FullPathname( sqlite3_vfs * vfs, const char * path, int len, char * fu
 
 int esp32_Lock(sqlite3_file *id, int lock_type)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	dbg_printf("esp32_Lock:Not locked\n");
 	return SQLITE_OK;
@@ -549,7 +564,7 @@ int esp32_Lock(sqlite3_file *id, int lock_type)
 
 int esp32_Unlock(sqlite3_file *id, int lock_type)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	dbg_printf("esp32_Unlock:\n");
 	return SQLITE_OK;
@@ -557,7 +572,7 @@ int esp32_Unlock(sqlite3_file *id, int lock_type)
 
 int esp32_CheckReservedLock(sqlite3_file *id, int *result)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	*result = 0;
 
@@ -567,7 +582,7 @@ int esp32_CheckReservedLock(sqlite3_file *id, int *result)
 
 int esp32_FileControl(sqlite3_file *id, int op, void *arg)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	dbg_printf("esp32_FileControl:\n");
 	return SQLITE_OK;
@@ -575,7 +590,7 @@ int esp32_FileControl(sqlite3_file *id, int op, void *arg)
 
 int esp32_SectorSize(sqlite3_file *id)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	dbg_printf("esp32_SectorSize:\n");
 	return SPI_FLASH_SEC_SIZE;
@@ -583,7 +598,7 @@ int esp32_SectorSize(sqlite3_file *id)
 
 int esp32_DeviceCharacteristics(sqlite3_file *id)
 {
-	esp32_file *file = (esp32_file*) id;
+	// esp32_file * file = (esp32_file *) id;
 
 	dbg_printf("esp32_DeviceCharacteristics:\n");
 	return 0;
@@ -666,7 +681,7 @@ static void shox96_0_2c(sqlite3_context *context, int argc, sqlite3_value **argv
 }
 
 static void shox96_0_2d(sqlite3_context *context, int argc, sqlite3_value **argv) {
-  unsigned int nIn, nOut, rc;
+  unsigned int nIn, nOut;
   const unsigned char *inBuf;
   unsigned char *outBuf;
   long int nOut2;
